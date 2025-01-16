@@ -1,0 +1,377 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+
+import requests
+from bs4 import BeautifulSoup
+
+import tkinter as tk
+from tkinter import ttk
+
+from sklearn.preprocessing import MinMaxScaler
+from tensorflow.keras import layers, Sequential
+from tensorflow.keras.optimizers import Adam
+
+import subprocess
+
+headers = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+}
+
+
+def get_top_25():
+    """
+    This function scrapes the top 25 most active companies on Yahoo Finance.
+    :return: A dataframe of the top 25 companies and its associated symbols.
+    """
+    # define the url of the page to scrape data from
+    url = "https://finance.yahoo.com/most-active"
+
+    # send an http get request to the specified url using headers for proper access
+    r = requests.get(url, headers=headers)
+
+    # parse the response text into a beautifulsoup object for html parsing
+    soup = BeautifulSoup(r.text, "html.parser")
+
+    # initialize an empty list to store company names
+    companies = []
+
+    # input class for table and loop through the top 25 most active companies
+    for row in soup.select("table tbody tr"):
+
+        # find all table data in the current row using element "td"
+        cells = row.find_all("td")
+
+        # extract and strip the text for the company name from the second cell
+        # .strip() removes any trailing spaces
+        company_name = cells[1].text.strip()
+
+        # extract and strip the text for the company symbol from the first cell
+        # .strip() removes any trailing spaces
+        company_symbol = cells[0].text.strip()
+
+        # append a dictionary of the company name and symbol to the companies list
+        companies.append({"Name": company_name, "Symbol": company_symbol})
+
+    # return the collected data as a pandas dataframe
+    return pd.DataFrame(companies)
+
+
+# call the function to get the top 25 companies and store in a dataframe
+companies_df = get_top_25()
+
+
+# define a function that takes a dataframe of companies as input
+def select_company(companies_df):
+    """
+    This function returns a drop down menu with the option of all 25 companies that have already been scraped.
+    :param companies_df (object): dataframe of the 25 companies.
+    :return: The company that was selected from the drop down menu.
+    """
+    selected_company = None  # initialize a variable to store the selected company
+
+    # define a function for the user to select a company on tkinter GUI
+    def on_confirm():
+
+        # make the selected_company variable accessible onto the window
+        nonlocal selected_company
+
+        # get the selected company from the window
+        selected_company = combo.get()
+
+        # check if a company has been selected
+        if selected_company:
+
+            # print the selected company once selected
+            print(f"Selected Company: {selected_company}")
+
+    # create a root window for the tkinter GUI
+    root = tk.Tk()
+
+    # set the title of the window
+    root.title("Select a Company")
+
+    # set the size of the window
+    root.geometry("400x400")
+
+    # create and display a label prompting the user to choose a company
+    ttk.Label(
+        root, text="Choose a company of interest, click confirm, click red X button:"
+    ).pack(pady=10)
+
+    # create a combobox with a list of company names from the dataframe
+    combo = ttk.Combobox(root, values=companies_df["Name"].tolist(), width=40)
+
+    # display the combobox
+    combo.pack(pady=10)
+
+    # create a confirm button that triggers the on_confirm function when pressed
+    confirm_button = ttk.Button(root, text="Confirm", command=on_confirm)
+
+    # display the confirm button
+    confirm_button.pack(pady=20)
+
+    # start the tkinter event loop to display the GUI
+    root.mainloop()
+
+    # return the selected company for the rest of the functions to use
+    return selected_company
+
+
+# call the select_company function and store the selected company in selected_company
+selected_company = select_company(companies_df)
+
+# print the selected company once you exit the window
+print(f"The company you selected is: {selected_company}")
+
+# check if a company was selected
+if selected_company:
+
+    # find the stock symbol of the selected company from the dataframe
+    symbol = companies_df.loc[companies_df["Name"] == selected_company, "Symbol"].iloc[
+        0
+    ]
+
+    # print the stock symbol for the selected company
+    print(f"The symbol for {selected_company} is: {symbol}")
+
+
+# define a function to fetch historical stock data for a given symbol
+def get_historical_data(symbol):
+    """
+    This functions scrapes the URL for historical data from the last 100 days.
+    :param symbol (str): Associated symbol of the selected company.
+    :return: List of historical data scraped from URL, containing selected company, associated symbol, opening price, high, low, and closing price.
+    """
+    # construct the url for each stock's historical data page
+    url = f"https://finance.yahoo.com/quote/{symbol}/history/"
+
+    # send an http get request to fetch the page content
+    r = requests.get(url, headers=headers)
+
+    # parse the response content with beautifulsoup for html parsing
+    soup = BeautifulSoup(r.text, "html.parser")
+
+    # find the table containing historical data with element "table" and class "table yf-j5d1ld"
+    table = soup.find("table", {"class": "table yf-j5d1ld"})
+
+    # get all rows in the table with element "tr" (table rows)
+    rows = table.find_all("tr")
+
+    # initialize a list to store the historical data
+    historical_data = []
+
+    # iterate through all rows in the link, skipping the header row
+    for row in rows[1:]:
+
+        # get all cells in the current row with element "td" (table data)
+        cols = row.find_all("td")
+
+        # if there are less than 6 columns, perform while loop
+        if len(cols) < 6:
+
+            # ensure there are enough cells, filling missing ones with None for consistent indexing
+            # because rows with quarterly dividends only have 1 row, and those cannot be added
+            while len(cols) < 6:
+                cols.append(None)
+
+        # choose columns you want to store in df by indexing in order of columns in table from url
+        # if no element is present, make it nan
+        # .strip() removes any trailing spaces
+        open = cols[1].text.strip() if cols[1] else np.nan
+        high = cols[2].text.strip() if cols[2] else np.nan
+        low = cols[3].text.strip() if cols[3] else np.nan
+        close = cols[4].text.strip() if cols[4] else np.nan
+        date = cols[0].text.strip() if cols[0] else np.nan
+
+        # create a dictionary with the columns you want to add and append the row's data to the historical data list
+        historical_data.append(
+            {
+                # convert date to datetime format if the element is not nan
+                "Date": (pd.to_datetime(date) if date != np.nan else np.nan),
+                "Open": open,
+                "High": high,
+                "Low": low,
+                "Close": close,
+            }
+        )
+
+    # return the collected historical data
+    return historical_data
+
+
+# fetch the historical data for the specified symbol and convert to a pandas dataframe
+all_historical_data = pd.DataFrame(get_historical_data(symbol))
+
+# iterate through the dataframe to clean rows with 'Dividend' in the 'Open' column, where it is present if not removed
+for i in range(len(all_historical_data)):
+
+    # if Dividend in row, then return NaN because neural network can't be trained on string
+    # these NaNs will be removed before training neural network
+    if "Dividend" in str(all_historical_data["Open"].iloc[i]):
+        all_historical_data.loc[i, "Open"] = np.nan
+
+# Make csv file:
+
+# name csv file
+csv = f"Historical Data of {selected_company}.csv"
+
+# convert all_historical_data dataframe to .csv format
+all_historical_data.to_csv(csv, index=False)
+
+# open the csv file
+subprocess.run(["open", csv], check=True)
+
+# convert the 'Open' column to numeric values; coercing errors allows it to fill empty data with NaNs
+all_historical_data["Open"] = pd.to_numeric(
+    all_historical_data["Open"], errors="coerce"
+)
+
+# convert the 'Close' column to numeric values coercing errors allows it to fill empty data with NaNs
+all_historical_data["Close"] = pd.to_numeric(
+    all_historical_data["Close"], errors="coerce"
+)
+
+# convert the 'High' column to numeric values coercing errors allows it to fill empty data with NaNs
+all_historical_data["High"] = pd.to_numeric(
+    all_historical_data["High"], errors="coerce"
+)
+
+# convert the 'Low' column to numeric values coercing errors allows it to fill empty data with NaNs
+all_historical_data["Low"] = pd.to_numeric(all_historical_data["Low"], errors="coerce")
+
+# drop rows with any NaNs from the dataframe
+all_historical_data = all_historical_data.dropna()
+
+
+# initialize the MinMaxScaler to scale the data between 0 and 1
+# this puts all data on one scale, optimizing the loss for neural network training
+scaler = MinMaxScaler()
+
+# create a copy of the historical data and apply the scaler to the relevant columns
+scaled_historical_data = all_historical_data.copy()
+
+# scale the 'Open', 'High', 'Low', and 'Close' columns to a range between 0 and 1
+# using MinMaxScaler, which normalizes the data based on the minimum and maximum values in each column, putting them on the same scale to make it easier to train
+scaled_historical_data[["Open", "High", "Low", "Close"]] = scaler.fit_transform(
+    scaled_historical_data[["Open", "High", "Low", "Close"]]
+)
+
+
+# define a function to format the dataset for time series forecasting. LSTM takes sequential data, so it is important to format the dataset to ensure it works
+def format_dataset(X, y, time_steps, future_steps):
+    """
+    This function preprocesses the dataset by creating time series windows of predictors, preparing it for training a neural network.
+    :param X (obj): Predictor variables containing 'Open', 'High', and 'Low' data.
+    :param y (obj): Response variable containing 'Close' data.
+    :param time_steps (int): The number of previous observations the model will use to predict the next observations.
+    :param future_steps (int): The number of future observations the model will predict.
+    """
+    # initialize lists to hold predictors (Xs) and response (ys) for training
+    # Xs will store the predictors (input data), ys will store the response (output data)
+    Xs, ys = ([], [])
+
+    # loop through the dataset, creating time steps windows for training
+    # the loop runs through the data, stopping before the last time step + future step to prevent out-of-range errors
+    # the model takes the number of time steps specified to predict the number of future steps specified
+    for i in range(len(X) - time_steps - future_steps):
+
+        # slice the predictors (X) from index i to i + time_steps, which creates a "window" of past observations
+        # this window will be used as predictors for the model
+        # slice the data frame to get time_steps number of rows
+        v = X.iloc[i : (i + time_steps)].values
+
+        # append the feature window to the Xs list
+        # The Xs will hold all the time-steps that the model will learn from
+        Xs.append(v)
+
+        # append the corresponding label (the value to predict) to the ys list
+        # the label is the value of 'y' at index i + time_steps + future_steps
+        # this refers to the 'Close' value that comes after the specified number of time steps and future steps
+        ys.append(y.iloc[i + time_steps + future_steps])  # add the target label to ys
+
+    # return the features (Xs) and labels (ys) as numpy arrays to be used in model training
+    # convert Xs and ys to numpy arrays for efficient processing in neural networks
+    return np.array(Xs), np.array(ys)
+
+
+# define a function to make predictions using an LSTM model
+def make_predictions(symbol, future_steps, time_steps):
+    """
+    This function trains a Bidirectional LSTM model on historical stock data to predict future stock prices by formatting the data using the specified time_steps and future_steps, reshaping it for LSTM input and then training the model.
+    :param symbol (str): The stock symbol of the selected company for which predictions are to be made.
+    :param time_steps (int): The number of previous observations the model will use to predict the next observations.
+    :param future_steps (int): The number of future observations the model will predict.
+    :return: Tuple containing the true 'Close' values from the dataset (y) and the predicted 'Close' values from the trained model (y_pred).
+    """
+    # define the predictor (X) and reponse (y) variables
+    # normally, open, high, and low prices are used to predict the closing price
+    X = scaled_historical_data[["Open", "High", "Low"]]
+    y = scaled_historical_data["Close"]
+
+    # format the dataset with the specified time_steps and future_steps
+    X, y = format_dataset(X, y, time_steps, future_steps=future_steps)
+
+    # reshape X to fit the LSTM input format (samples, time_steps, features)
+    X = np.reshape(X, (X.shape[0], X.shape[1], X.shape[2]))
+
+    # define the LSTM model architecture
+    # Create a Sequential model, which allows stacking layers in a linear fashion
+    model = Sequential(
+        [
+            # Input defines the shape of the input data, where X.shape[1] is the number of time steps, and X.shape[2] is the number of features for each time step ('Open', 'High', 'Low').
+            layers.Input(shape=(X.shape[1], X.shape[2])),
+            # Bidirectional LSTM (long short term memory) layer wraps an LSTM layer to process the input sequence in both forward and backward directions.
+            # It helps the model capture patterns from both past and future time steps in the sequence.
+            # 'units=32' specifies the number of LSTM units in the layer.
+            layers.Bidirectional(layers.LSTM(units=32)),
+            # Dropout layer is a fraction of the input units to 0 at each update
+            # during training to prevent overfitting. This helps the model generalize better.
+            layers.Dropout(0.1),
+            # A fully connected layer with 1 neuron, which produces the output prediction (the 'Close' price).
+            layers.Dense(1),
+        ]
+    )
+
+    # linear activation function because there are a lot of numbers involved
+
+    # compile the model with Adam optimizer with low learning rate for slower convergence, making it more likely to reach the global minimum, and mean squared error loss as metric to optimize model. The model looks for the lowest mean square error.
+    # used mse as loss because we are using a linear activation function
+    model.compile(
+        optimizer=Adam(learning_rate=0.001), loss="mean_squared_error", metrics=["mae"]
+    )
+
+    # fit the model onto the X and y variables
+    # 150 epochs allows the model to learn better becuase it is being trained on more batches
+    # data is divided into batches of 16 samples for faster gradient updates
+    # 20% of the data is used for validation to monitor model performance during training
+    model.fit(
+        X, y, epochs=150, batch_size=16, validation_split=0.2, shuffle=False, verbose=1
+    )
+
+    # make predictions using the trained model
+    predicted_values = model.predict(X)
+
+    # return the true values and predicted values
+    return y, predicted_values
+
+
+# set the company symbol, future_steps, and time_steps for prediction
+symbol = symbol
+future_steps = 10
+time_steps = 10
+
+# call the function to get true values and predicted values
+true_values, predicted_values = make_predictions(
+    symbol, future_steps=future_steps, time_steps=time_steps
+)
+
+# plot the true values vs the predicted values
+plt.figure(figsize=(10, 6))
+plt.plot(true_values, label="True Values")
+plt.plot(predicted_values, label="Predictions")
+plt.title(f"True vs Predicted Values for {selected_company}")
+plt.xlabel("Days")
+plt.ylabel("Stock Price")
+plt.legend()
+plt.show()
