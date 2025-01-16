@@ -1,0 +1,93 @@
+import speech_recognition as sr
+import openai
+import pyttsx3
+import os
+from pymed import PubMed
+
+recognizer = sr.Recognizer()
+engine = pyttsx3.init()
+
+api_key = os.getenv("OPEN_API_KEY")
+
+def chat_with_gpt(prompt, context=None):
+    try:
+        messages = [{"role": "user", "content": prompt}]
+        if context:
+            messages.append({"role": "system", "content": context})
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo", 
+            messages=messages
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        print(f"{e}")
+        return "Error"
+
+
+def recognize_speech():
+    with sr.Microphone() as source:
+        print("Say something! (Say 'stop' to end listening)")
+        recognizer.adjust_for_ambient_noise(source)
+        audio = recognizer.listen(source)
+    try:
+        text = recognizer.recognize_google(audio)
+        print("You said:", text)
+        return text
+    except sr.UnknownValueError:
+        print("Could not understand audio")
+        return None
+    except sr.RequestError as e:
+        print(f"Could not request results: {e}")
+        return None
+
+
+def pubmed_query(query):
+    try:
+        pubmed = PubMed()
+        results = pubmed.query(query, max_results=5)
+        papers = []
+        for article in results:
+            title = article.title
+            abstract = article.abstract
+            if abstract:
+                papers.append(f"Title: {title}\nAbstract: {abstract}")
+            else:
+                papers.append(f"Title: {title}\nAbstract: No abstract available.")
+        return papers if papers else ["No results found."]
+    except Exception as e:
+        print(f"Error querying PubMed: {e}")
+        return ["Error fetching PubMed data."]
+
+
+def listen_continuously():
+    with sr.Microphone() as source:
+        recognizer.adjust_for_ambient_noise(source)
+        while True:
+            try:
+                audio = recognizer.listen(source, timeout=1)
+            except sr.WaitTimeoutError:
+                continue
+
+
+if __name__ == "__main__":
+    import threading
+
+    silence_thread = threading.Thread(target=listen_continuously)
+    silence_thread.daemon = True
+    silence_thread.start()
+
+    while True:
+        speech_text = recognize_speech()
+        if speech_text and "stop" in speech_text.lower():
+            print("Ending interaction.")
+            break
+
+        if speech_text:
+            pubmed_results = pubmed_query(speech_text)
+            pubmed_context = " ".join(pubmed_results)
+
+            response = chat_with_gpt(speech_text, context=pubmed_context)
+            print("Chatbot:", response)
+
+            engine.say(response)
+            engine.runAndWait()
